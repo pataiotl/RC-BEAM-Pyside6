@@ -6,9 +6,10 @@ from io import BytesIO
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFormLayout, QLabel, QPushButton, QRadioButton, QComboBox,
+    QFormLayout, QLabel, QPushButton, QRadioButton, QComboBox, QLineEdit,
     QSpinBox, QDoubleSpinBox, QFileDialog, QTabWidget, QScrollArea,
-    QGroupBox, QMessageBox, QTableView, QHeaderView
+    QGroupBox, QMessageBox, QTableView, QHeaderView, QListWidget,
+    QListWidgetItem, QAbstractItemView
 )
 from PySide6.QtCore import Qt, QAbstractTableModel
 from PySide6.QtGui import QFont
@@ -31,6 +32,7 @@ from utils import (
 )
 
 from qt_models import PandasModel
+from sap2000_api import get_selected_frames_forces
 
 class StatusCard(QLabel):
     def __init__(self, kind, text):
@@ -106,6 +108,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("RC Beam Designer - PySide6")
         self.app_state = DEFAULT_APP_STATE.copy()
+        self.app_state["group_name"] = "Manual"
+        self.groups = {"Manual": self.app_state}
+        self.active_group_id = "Manual"
         self.inputs = {}
         self.forces = {zone: {"M": 0.0, "V": 0.0, "T": 0.0} for zone in ZONES}
         self.force_meta = {zone: {kind: "Manual input" for kind in ["M", "V", "T"]} for zone in ZONES}
@@ -116,9 +121,12 @@ class MainWindow(QMainWindow):
         self.refresh_ui_from_state()
 
     def init_ui(self):
-        main_widget = QWidget()
-        main_layout = QVBoxLayout(main_widget)
+        self.main_tabs = QTabWidget()
+        self.setCentralWidget(self.main_tabs)
         
+        # ----------------- INPUT TAB -----------------
+        input_tab = QWidget()
+        input_layout = QVBoxLayout(input_tab)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
@@ -146,16 +154,38 @@ class MainWindow(QMainWindow):
         io_layout.addWidget(btn_save)
         self.scroll_layout.addLayout(io_layout)
         
+        self.add_section_header("Active Group Selection")
+        self.group_combo = QComboBox()
+        self.group_combo.addItem("Manual")
+        self.group_combo.currentTextChanged.connect(self.on_group_changed)
+        self.scroll_layout.addWidget(self.group_combo)
+        
         self.add_section_header("Force Input Source")
         self.rb_manual = QRadioButton("Manual Input")
         self.rb_sap = QRadioButton("SAP2000 CSV Upload")
+        self.rb_sap_live = QRadioButton("SAP2000 Live API")
+        
         self.rb_manual.toggled.connect(self.on_input_mode_changed)
+        self.rb_sap.toggled.connect(self.on_input_mode_changed)
+        self.rb_sap_live.toggled.connect(self.on_input_mode_changed)
         
         rb_layout = QHBoxLayout()
         rb_layout.addWidget(self.rb_manual)
         rb_layout.addWidget(self.rb_sap)
+        rb_layout.addWidget(self.rb_sap_live)
         rb_layout.addStretch()
         self.scroll_layout.addLayout(rb_layout)
+        
+        # SAP Live API widget container
+        self.live_api_widget = QWidget()
+        live_api_layout = QVBoxLayout(self.live_api_widget)
+        btn_fetch_live = QPushButton("Connect & Fetch Selected Frames")
+        btn_fetch_live.clicked.connect(self.fetch_live_api_data)
+        live_api_layout.addWidget(btn_fetch_live)
+        self.live_api_status_label = QLabel("Select frames in an active SAP2000 window, then fetch.")
+        self.live_api_status_label.setWordWrap(True)
+        live_api_layout.addWidget(self.live_api_status_label)
+        self.scroll_layout.addWidget(self.live_api_widget)
         
         # SAP input widget container
         self.sap_widget = QWidget()
@@ -166,6 +196,45 @@ class MainWindow(QMainWindow):
         self.sap_status_label = QLabel("No SAP data loaded.")
         sap_layout.addWidget(self.sap_status_label)
         self.scroll_layout.addWidget(self.sap_widget)
+        
+        # Shared data table and grouping widget (visible for both CSV and Live API)
+        self.sap_data_widget = QWidget()
+        sap_data_layout = QVBoxLayout(self.sap_data_widget)
+        
+        self.sap_table = QTableView()
+        self.sap_table.setFixedHeight(150)
+        sap_data_layout.addWidget(self.sap_table)
+        
+        # Frame selection list with checkboxes
+        sap_data_layout.addWidget(QLabel("Select Frames:"))
+        self.frame_list = QListWidget()
+        self.frame_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.frame_list.setFixedHeight(120)
+        sap_data_layout.addWidget(self.frame_list)
+        
+        # Select All / Remove All buttons
+        frame_btn_layout = QHBoxLayout()
+        btn_select_all = QPushButton("Select All")
+        btn_select_all.clicked.connect(self.select_all_frames)
+        btn_clear = QPushButton("Remove All")
+        btn_clear.clicked.connect(self.clear_frames)
+        frame_btn_layout.addWidget(btn_select_all)
+        frame_btn_layout.addWidget(btn_clear)
+        frame_btn_layout.addStretch()
+        sap_data_layout.addLayout(frame_btn_layout)
+        
+        # Group name + Create
+        group_layout = QHBoxLayout()
+        self.txt_group_name = QLineEdit()
+        self.txt_group_name.setPlaceholderText("Group Name (e.g. B1)")
+        btn_create_group = QPushButton("Create Group from Checked Frames")
+        btn_create_group.clicked.connect(self.create_group)
+        group_layout.addWidget(QLabel("Group Name:"))
+        group_layout.addWidget(self.txt_group_name, 1)
+        group_layout.addWidget(btn_create_group)
+        sap_data_layout.addLayout(group_layout)
+        
+        self.scroll_layout.addWidget(self.sap_data_widget)
         
         # Manual input widget container
         self.manual_widget = QWidget()
@@ -257,20 +326,84 @@ class MainWindow(QMainWindow):
         self.scroll_layout.addWidget(self.tabs)
         
         # Run Design
-        self.btn_run = QPushButton("Run full 3-zone detailing design")
+        run_layout = QHBoxLayout()
+        self.btn_run = QPushButton("Design Active Group")
         self.btn_run.setObjectName("primaryButton")
         self.btn_run.clicked.connect(self.run_design)
-        self.scroll_layout.addWidget(self.btn_run)
+        run_layout.addWidget(self.btn_run)
         
-        # Results Container
-        self.results_container = QWidget()
-        self.results_layout = QVBoxLayout(self.results_container)
-        self.results_container.setVisible(False)
-        self.scroll_layout.addWidget(self.results_container)
+        self.btn_run_all = QPushButton("Design All Groups")
+        self.btn_run_all.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
+        self.btn_run_all.clicked.connect(self.run_all_groups_design)
+        run_layout.addWidget(self.btn_run_all)
+        
+        self.scroll_layout.addLayout(run_layout)
         
         scroll.setWidget(scroll_content)
-        main_layout.addWidget(scroll)
-        self.setCentralWidget(main_widget)
+        input_layout.addWidget(scroll)
+        self.main_tabs.addTab(input_tab, "Input")
+        
+        # ----------------- RESULTS TAB -----------------
+        self.results_tab = QWidget()
+        self.results_tab_layout = QVBoxLayout(self.results_tab)
+        
+        res_header = QHBoxLayout()
+        res_header.addWidget(QLabel("Select Group:"))
+        self.results_group_combo = QComboBox()
+        self.results_group_combo.currentTextChanged.connect(self.on_results_group_changed)
+        res_header.addWidget(self.results_group_combo, 1)
+        self.results_tab_layout.addLayout(res_header)
+        
+        res_scroll = QScrollArea()
+        res_scroll.setWidgetResizable(True)
+        res_scroll_content = QWidget()
+        self.results_layout = QVBoxLayout(res_scroll_content)
+        
+        # We keep self.results_container for compatibility with existing code
+        self.results_container = QWidget()
+        self.results_inner_layout = QVBoxLayout(self.results_container)
+        self.results_layout.addWidget(self.results_container)
+        
+        res_scroll.setWidget(res_scroll_content)
+        self.results_tab_layout.addWidget(res_scroll)
+        
+        self.main_tabs.addTab(self.results_tab, "Results")
+        
+        # ----------------- EXPORT TAB -----------------
+        self.export_tab = QWidget()
+        self.export_tab_layout = QVBoxLayout(self.export_tab)
+        
+        self.export_tab_layout.addWidget(QLabel("Select Groups to Export:"))
+        self.export_list = QListWidget()
+        self.export_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.export_tab_layout.addWidget(self.export_list)
+        
+        exp_btn_layout1 = QHBoxLayout()
+        btn_sel_all = QPushButton("Select All")
+        btn_sel_all.clicked.connect(lambda: self.set_export_list_state(Qt.Checked))
+        btn_unsel_all = QPushButton("Remove All")
+        btn_unsel_all.clicked.connect(lambda: self.set_export_list_state(Qt.Unchecked))
+        exp_btn_layout1.addWidget(btn_sel_all)
+        exp_btn_layout1.addWidget(btn_unsel_all)
+        exp_btn_layout1.addStretch()
+        self.export_tab_layout.addLayout(exp_btn_layout1)
+        
+        exp_btn_layout2 = QHBoxLayout()
+        btn_exp_sel = QPushButton("Export Selected")
+        btn_exp_sel.setStyleSheet("background-color: #2563eb; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
+        btn_exp_sel.clicked.connect(self.export_selected_groups_pdf)
+        btn_exp_all = QPushButton("Export All")
+        btn_exp_all.setStyleSheet("background-color: #7c3aed; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
+        btn_exp_all.clicked.connect(self.export_all_groups_pdf)
+        exp_btn_layout2.addWidget(btn_exp_sel)
+        exp_btn_layout2.addWidget(btn_exp_all)
+        self.export_tab_layout.addLayout(exp_btn_layout2)
+        
+        self.main_tabs.addTab(self.export_tab, "Export")
+        
+        # Hide tabs initially
+        self.main_tabs.setTabVisible(1, False)
+        self.main_tabs.setTabVisible(2, False)
         
         self.rb_manual.setChecked(True)
 
@@ -339,6 +472,8 @@ class MainWindow(QMainWindow):
 
         if self.app_state.get("input_mode") == "SAP2000 CSV Upload":
             self.rb_sap.setChecked(True)
+        elif self.app_state.get("input_mode") == "SAP2000 Live API":
+            self.rb_sap_live.setChecked(True)
         else:
             self.rb_manual.setChecked(True)
             
@@ -348,14 +483,288 @@ class MainWindow(QMainWindow):
         if self.rb_sap.isChecked():
             self.app_state["input_mode"] = "SAP2000 CSV Upload"
             self.sap_widget.setVisible(True)
+            self.live_api_widget.setVisible(False)
+            self.sap_data_widget.setVisible(True)
+            self.manual_widget.setVisible(False)
+            self.process_sap_data()
+        elif self.rb_sap_live.isChecked():
+            self.app_state["input_mode"] = "SAP2000 Live API"
+            self.sap_widget.setVisible(False)
+            self.live_api_widget.setVisible(True)
+            self.sap_data_widget.setVisible(True)
             self.manual_widget.setVisible(False)
             self.process_sap_data()
         else:
             self.app_state["input_mode"] = "Manual Input"
             self.sap_widget.setVisible(False)
+            self.live_api_widget.setVisible(False)
+            self.sap_data_widget.setVisible(False)
             self.manual_widget.setVisible(True)
             self.update_forces_from_state()
             
+        self.refresh_group_combo()
+        
+    def refresh_group_combo(self):
+        self.group_combo.blockSignals(True)
+        self.group_combo.clear()
+        mode = self.app_state.get("input_mode", "Manual Input")
+        for g_name in self.groups:
+            if g_name == "Manual" and mode != "Manual Input":
+                continue
+            self.group_combo.addItem(g_name)
+            
+        if self.active_group_id in [self.group_combo.itemText(i) for i in range(self.group_combo.count())]:
+            self.group_combo.setCurrentText(self.active_group_id)
+        elif self.group_combo.count() > 0:
+            self.group_combo.setCurrentIndex(0)
+            self.on_group_changed(self.group_combo.currentText())
+        self.group_combo.blockSignals(False)
+            
+    
+    def on_group_changed(self, group_name):
+        if group_name and group_name in self.groups:
+            self.active_group_id = group_name
+            self.app_state = self.groups[group_name]
+            # Restore per-group forces if stored
+            if "_forces" in self.app_state:
+                self.forces = self.app_state["_forces"]
+                self.force_meta = self.app_state["_force_meta"]
+            # Update UI fields to match new app_state
+            self.update_forces_from_state()
+            self.refresh_ui_from_state()
+
+    def get_checked_frames(self):
+        """Return list of frame IDs that are checked in the frame_list."""
+        checked = []
+        for i in range(self.frame_list.count()):
+            item = self.frame_list.item(i)
+            if item.checkState() == Qt.Checked:
+                checked.append(item.text())
+        return checked
+
+    def select_all_frames(self):
+        for i in range(self.frame_list.count()):
+            self.frame_list.item(i).setCheckState(Qt.Checked)
+            
+    def clear_frames(self):
+        for i in range(self.frame_list.count()):
+            self.frame_list.item(i).setCheckState(Qt.Unchecked)
+
+    def create_group(self):
+        if self.df_sap is None or self.df_sap.empty:
+            QMessageBox.warning(self, "No Data", "Please load SAP data first.")
+            return
+            
+        checked_frames = self.get_checked_frames()
+        group_name = self.txt_group_name.text().strip()
+        
+        if not checked_frames:
+            QMessageBox.warning(self, "No Frames", "Please check at least one frame in the list.")
+            return
+        if not group_name:
+            QMessageBox.warning(self, "No Name", "Please enter a group name (e.g. B1).")
+            return
+            
+        df_group = self.df_sap[self.df_sap["Frame"].astype(str).isin(checked_frames)]
+        if df_group.empty:
+            QMessageBox.warning(self, "Not Found", "None of the checked frames were found in the data.")
+            return
+            
+        # Calculate envelope forces for each zone
+        new_state = self.app_state.copy()
+        new_state["group_name"] = group_name
+        new_state["input_mode"] = self.app_state["input_mode"]
+        
+        # Build per-zone force dicts for this group
+        grp_forces = {zone: {"M": 0.0, "V": 0.0, "T": 0.0} for zone in ZONES}
+        grp_meta = {zone: {"M": f"{group_name} envelope", "V": f"{group_name} envelope", "T": f"{group_name} envelope"} for zone in ZONES}
+
+        stations = sorted(df_group["Station"].unique())
+        if len(stations) >= 3:
+            st_left, st_mid, st_right = stations[0], stations[len(stations)//2], stations[-1]
+            new_state["beam_length"] = st_right - st_left
+            
+            for zone, st in zip(["Left", "Mid", "Right"], [st_left, st_mid, st_right]):
+                df_st = df_group[df_group["Station"] == st]
+                if not df_st.empty:
+                    grp_forces[zone]["M"] = float(df_st["M3"].abs().max())
+                    grp_forces[zone]["V"] = float(df_st["V2"].abs().max())
+                    grp_forces[zone]["T"] = float(df_st["T"].abs().max())
+                    # Also store in state for persistence
+                    new_state[f"mu_{zone.lower()}"] = grp_forces[zone]["M"]
+                    new_state[f"vu_{zone.lower()}"] = grp_forces[zone]["V"]
+                    new_state[f"tu_{zone.lower()}"] = grp_forces[zone]["T"]
+        
+        # Persist forces and meta inside the group state so they survive group switching
+        new_state["_forces"] = grp_forces
+        new_state["_force_meta"] = grp_meta
+
+        self.groups[group_name] = new_state
+        self.refresh_group_combo()
+        self.group_combo.setCurrentText(group_name)
+        QMessageBox.information(self, "Success", f"Group '{group_name}' created with {len(checked_frames)} frames.")
+
+    def on_results_group_changed(self, group_name):
+        if not group_name or group_name not in self.groups:
+            return
+        
+        # Load the state of the selected group and run design for it to render the results
+        prev_group = self.active_group_id
+        prev_forces = {z: dict(v) for z, v in self.forces.items()}
+        prev_meta = {z: dict(v) for z, v in self.force_meta.items()}
+
+        self.app_state = self.groups[group_name]
+        # Restore per-group forces
+        if "_forces" in self.app_state:
+            self.forces = self.app_state["_forces"]
+            self.force_meta = self.app_state["_force_meta"]
+        self.update_forces_from_state()
+        self.run_design(switch_tab=False)
+
+        # Restore previous group
+        self.app_state = self.groups[prev_group]
+        self.forces = prev_forces
+        self.force_meta = prev_meta
+        self.update_forces_from_state()
+
+    def set_export_list_state(self, state):
+        for i in range(self.export_list.count()):
+            self.export_list.item(i).setCheckState(state)
+
+    def _get_groups_for_output(self):
+        groups_to_show = []
+        mode = self.app_state.get("input_mode", "Manual Input")
+        for g_name in self.groups:
+            if g_name == "Manual" and mode != "Manual Input":
+                continue
+            groups_to_show.append(g_name)
+        return groups_to_show
+
+    def _unlock_and_populate_tabs(self):
+        # Make tabs visible
+        self.main_tabs.setTabVisible(1, True)
+        self.main_tabs.setTabVisible(2, True)
+        
+        groups_to_show = self._get_groups_for_output()
+        
+        # Populate Results tab combo
+        self.results_group_combo.blockSignals(True)
+        self.results_group_combo.clear()
+        self.results_group_combo.addItems(groups_to_show)
+        if self.active_group_id in groups_to_show:
+            self.results_group_combo.setCurrentText(self.active_group_id)
+        self.results_group_combo.blockSignals(False)
+        
+        # Populate Export tab checklist
+        self.export_list.clear()
+        for g in groups_to_show:
+            item = QListWidgetItem(g)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.export_list.addItem(item)
+
+    def _build_all_groups_pdf(self):
+        """Run design on every group and return PDF bytes."""
+        pdf_groups = []
+        prev_group = self.active_group_id
+        
+        for g_name, g_state in self.groups.items():
+            if g_name == "Manual" and self.app_state.get("input_mode") != "Manual Input":
+                continue
+            
+            self.app_state = g_state
+            if "_forces" in g_state:
+                self.forces = g_state["_forces"]
+                self.force_meta = g_state["_force_meta"]
+            self.update_forces_from_state()
+            self.run_design()
+            
+            group_data = {
+                "group_name": g_name,
+                "b": self.app_state.get("b", 300),
+                "h": self.app_state.get("h", 600),
+                "fc": self.app_state.get("fc", 35),
+                "fy": self.app_state.get("fy", 500),
+                "fyt": self.app_state.get("fyt", 400),
+                "zone_data": self.last_zone_results.copy()
+            }
+            pdf_groups.append(group_data)
+            
+        # Restore active group
+        self.app_state = self.groups[prev_group]
+        self.update_forces_from_state()
+        self.run_design()
+        return pdf_groups
+
+    def run_all_groups_design(self):
+        """Design every group and show results for the last active one."""
+        if len(self.groups) <= 1 and "Manual" in self.groups:
+            QMessageBox.information(self, "Info", "Only the Manual group exists. Create groups from SAP data first, or use 'Design Active Group'.")
+            return
+        self._build_all_groups_pdf()
+        self._unlock_and_populate_tabs()
+        self.main_tabs.setCurrentIndex(1)
+        QMessageBox.information(self, "Done", f"All {len(self.groups)} groups have been designed successfully.")
+
+    def export_selected_groups_pdf(self):
+        """Design and export only the checked groups in the Export tab."""
+        checked = []
+        for i in range(self.export_list.count()):
+            item = self.export_list.item(i)
+            if item.checkState() == Qt.Checked:
+                checked.append(item.text())
+        
+        if not checked:
+            QMessageBox.warning(self, "Warning", "No groups selected for export.")
+            return
+            
+        pdf_groups = []
+        prev_group = self.active_group_id
+        
+        for g_name in checked:
+            if g_name in self.groups:
+                self.app_state = self.groups[g_name]
+                self.update_forces_from_state()
+                self.run_design(switch_tab=False)
+                
+                group_data = {
+                    "group_name": g_name,
+                    "b": self.app_state.get("b", 300),
+                    "h": self.app_state.get("h", 600),
+                    "fc": self.app_state.get("fc", 35),
+                    "fy": self.app_state.get("fy", 500),
+                    "fyt": self.app_state.get("fyt", 400),
+                    "zone_data": self.last_zone_results.copy()
+                }
+                pdf_groups.append(group_data)
+                
+        # Restore active group
+        self.app_state = self.groups[prev_group]
+        self.update_forces_from_state()
+        self.run_design(switch_tab=False)
+        
+        from pdf_report import create_pdf_report
+        pdf_bytes = create_pdf_report(pdf_groups, self.app_state.get("input_mode", "Manual Input"))
+        
+        fname, _ = QFileDialog.getSaveFileName(self, "Save Selected Groups PDF", "Selected_Groups_Report.pdf", "PDF Files (*.pdf)")
+        if fname:
+            with open(fname, "wb") as f:
+                f.write(pdf_bytes)
+            QMessageBox.information(self, "Exported", f"PDF with {len(pdf_groups)} group(s) saved to {fname}")
+
+    def export_all_groups_pdf(self):
+        """Design every group and export a multi-page PDF."""
+        pdf_groups = self._build_all_groups_pdf()
+        
+        from pdf_report import create_pdf_report
+        pdf_bytes = create_pdf_report(pdf_groups, self.app_state.get("input_mode", "Manual Input"))
+        
+        fname, _ = QFileDialog.getSaveFileName(self, "Save All Groups PDF", "All_Groups_Report.pdf", "PDF Files (*.pdf)")
+        if fname:
+            with open(fname, "wb") as f:
+                f.write(pdf_bytes)
+            QMessageBox.information(self, "Exported", f"PDF with {len(pdf_groups)} group(s) saved to {fname}")
+
     def update_forces_from_state(self):
         if self.app_state.get("input_mode") == "Manual Input":
             for zone in ZONES:
@@ -381,6 +790,17 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load CSV: {str(e)}")
 
+    def fetch_live_api_data(self):
+        try:
+            self.live_api_status_label.setText("Connecting to SAP2000...")
+            df_raw = get_selected_frames_forces()
+            self.app_state["sap_raw_json"] = df_raw.to_json(orient="split")
+            self.live_api_status_label.setText(f"Success! Fetched forces for {len(df_raw['Frame'].unique())} frames.")
+            self.process_sap_data()
+        except Exception as e:
+            self.live_api_status_label.setText(f"Error: {str(e)}")
+            QMessageBox.critical(self, "API Error", str(e))
+
     def process_sap_data(self):
         sap_json = self.app_state.get("sap_raw_json", "")
         if not sap_json:
@@ -404,9 +824,20 @@ class MainWindow(QMainWindow):
             if not available_frames:
                 self.sap_status_label.setText("No frame IDs found.")
                 return
-                
-            # For simplicity in PySide6, we just pick the first frame if grouping isn't fully built
-            # In a full app, we'd add QComboBoxes to pick frames. We will auto-select the first for now.
+            
+            # Store full raw data for grouping
+            self.df_sap = df_raw
+            
+            # Populate data table and frame checklist
+            self.sap_table.setModel(PandasModel(df_raw.head(100)))
+            self.frame_list.clear()
+            for f in available_frames:
+                item = QListWidgetItem(str(f))
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Unchecked)
+                self.frame_list.addItem(item)
+            
+            # Auto-analyze first frame for immediate display
             selected = available_frames[0]
             self.sap_status_label.setText(f"Loaded frames: {len(available_frames)}. Currently analyzing Frame {selected}")
             self.selected_frame_label = selected
@@ -429,9 +860,8 @@ class MainWindow(QMainWindow):
                     self.forces[zone]["M"], self.force_meta[zone]["M"] = governing_value_and_combo(zdf, "M3")
                     self.forces[zone]["V"], self.force_meta[zone]["V"] = governing_value_and_combo(zdf, "V2", "V2_abs")
                     self.forces[zone]["T"], self.force_meta[zone]["T"] = governing_value_and_combo(zdf, "T", "T_abs")
-                    
-                self.df_sap = df
-                self.update_force_diagram()
+                
+            self.update_force_diagram()
         except Exception as e:
             self.sap_status_label.setText(f"Error parsing SAP data: {e}")
 
@@ -476,13 +906,16 @@ class MainWindow(QMainWindow):
                 else:
                     self.clear_layout(item.layout())
 
-    def run_design(self):
-        self.clear_layout(self.results_layout)
-        self.results_container.setVisible(True)
+    def run_design(self, switch_tab=True):
+        if self.app_state.get("input_mode") == "Manual Input":
+            self.update_forces_from_state()
+            
+        self.clear_layout(self.results_inner_layout)
+        
         
         lbl = QLabel("Three-Zone Cross Sections and Calculations")
         lbl.setObjectName("sectionHeader")
-        self.results_layout.addWidget(lbl)
+        self.results_inner_layout.addWidget(lbl)
         
         zones_layout = QHBoxLayout()
         self.last_zone_results = {}
@@ -716,7 +1149,7 @@ class MainWindow(QMainWindow):
             
             zones_layout.addLayout(zone_col)
             
-        self.results_layout.addLayout(zones_layout)
+        self.results_inner_layout.addLayout(zones_layout)
         
         if self.last_summary:
             df_sum = pd.DataFrame(self.last_summary)
@@ -725,23 +1158,31 @@ class MainWindow(QMainWindow):
             table.setModel(model)
             table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             table.setFixedHeight(120)
-            self.results_layout.addWidget(table)
+            self.results_inner_layout.addWidget(table)
             
             btn_pdf = QPushButton("Download PDF calculation report")
             btn_pdf.setObjectName("primaryButton")
             btn_pdf.clicked.connect(self.download_pdf)
-            self.results_layout.addWidget(btn_pdf)
+            self.results_inner_layout.addWidget(btn_pdf)
 
+
+        if switch_tab:
+            self._unlock_and_populate_tabs()
+            self.main_tabs.setCurrentIndex(1)
     def download_pdf(self):
         fname, _ = QFileDialog.getSaveFileName(self, "Save PDF Report", f"Beam_{safe_filename(self.selected_frame_label)}_Report.pdf", "PDF Files (*.pdf)")
         if fname:
             try:
-                b = self.app_state.get("b", 300)
-                h = self.app_state.get("h", 600)
-                fc = self.app_state.get("fc", 35)
-                fy = self.app_state.get("fy", 500)
-                fyt = self.app_state.get("fyt", 400)
-                pdf_bytes = create_pdf_report(b, h, fc, fy, fyt, self.selected_frame_label, self.last_zone_results, self.app_state.get("input_mode"))
+                group_data = {
+                    "group_name": self.app_state.get("group_name", self.selected_frame_label),
+                    "b": self.app_state.get("b", 300),
+                    "h": self.app_state.get("h", 600),
+                    "fc": self.app_state.get("fc", 35),
+                    "fy": self.app_state.get("fy", 500),
+                    "fyt": self.app_state.get("fyt", 400),
+                    "zone_data": self.last_zone_results.copy()
+                }
+                pdf_bytes = create_pdf_report([group_data], self.app_state.get("input_mode"))
                 with open(fname, 'wb') as f:
                     f.write(pdf_bytes)
                 QMessageBox.information(self, "Success", "PDF Report saved successfully.")
