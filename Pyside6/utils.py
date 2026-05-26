@@ -5,7 +5,7 @@ import html
 from io import BytesIO
 import pandas as pd
 
-from engine import ZONES, BAR_OPTIONS, STIRRUP_OPTIONS, SKIN_BAR_OPTIONS
+from beam_engine import ZONES, BAR_OPTIONS, STIRRUP_OPTIONS, SKIN_BAR_OPTIONS
 
 def build_default_app_state():
     state = {

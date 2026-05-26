@@ -18,7 +18,7 @@ matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 # Import our custom modules
-from engine import (
+from beam_engine import (
     ZONES, BAR_OPTIONS, STIRRUP_OPTIONS, SKIN_BAR_OPTIONS,
     calculate_beam_flexure, calculate_shear_torsion,
     calculate_development_length, calculate_skin_reinforcement, get_rebar_group
@@ -30,30 +30,76 @@ from utils import (
     governing_value_and_combo, safe_filename
 )
 
-class PandasModel(QAbstractTableModel):
-    def __init__(self, data):
+from qt_models import PandasModel
+
+class StatusCard(QLabel):
+    def __init__(self, kind, text):
+        super().__init__(text)
+        self.setWordWrap(True)
+        if kind == "fail":
+            bg, color, border = "#2a0a0a", "#f87171", "#991b1b"
+        elif kind == "warn":
+            bg, color, border = "#2a1f00", "#fbbf24", "#92400e"
+        else:
+            bg, color, border = "#052a14", "#22c55e", "#166534"
+        self.setStyleSheet(f"background-color: {bg}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 6px; font-weight: bold;")
+
+class MiniMetric(QWidget):
+    def __init__(self, label, value, delta, status="pass"):
         super().__init__()
-        self._data = data
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(2)
+        self.setStyleSheet("background-color: #181c24; border: 1px solid #2a3044; border-radius: 6px;")
+        
+        lbl_title = QLabel(label)
+        lbl_title.setStyleSheet("color: #e8eaf0; font-size: 10px; font-weight: bold; border: none;")
+        
+        lbl_value = QLabel(value)
+        lbl_value.setStyleSheet("color: white; font-size: 16px; font-weight: bold; border: none;")
+        
+        lbl_delta = QLabel(delta)
+        if status == "fail":
+            bg, txt, border = "#2a0a0a", "#f87171", "#991b1b"
+        elif status == "warn":
+            bg, txt, border = "#2a1f00", "#fbbf24", "#92400e"
+        else:
+            bg, txt, border = "#064e24", "#22c55e", "#166534"
+        lbl_delta.setStyleSheet(f"color: {txt}; background-color: {bg}; border: 1px solid {border}; border-radius: 8px; padding: 2px 4px; font-size: 9px; font-weight: bold;")
+        
+        layout.addWidget(lbl_title)
+        layout.addWidget(lbl_value)
+        layout.addWidget(lbl_delta)
 
-    def rowCount(self, parent=None):
-        return self._data.shape[0]
+class CheckRow(QWidget):
+    def __init__(self, label, ok, detail, warn=False):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        self.setStyleSheet("background-color: #181c24; border: 1px solid #2a3044; border-radius: 6px;")
+        
+        lbl_title = QLabel(label)
+        lbl_title.setStyleSheet("font-weight: bold; color: #e8eaf0; border: none;")
+        lbl_title.setMinimumWidth(150)
+        
+        lbl_detail = QLabel(detail)
+        lbl_detail.setStyleSheet("color: #98a2b8; font-family: monospace; font-size: 11px; border: none;")
+        lbl_detail.setWordWrap(True)
+        
+        badge = QLabel("WARN" if warn else ("PASS" if ok else "FAIL"))
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedWidth(50)
+        if warn:
+            badge.setStyleSheet("color: #fbbf24; background-color: #2a1f00; border: 1px solid #92400e; border-radius: 4px; padding: 3px; font-family: monospace; font-weight: bold;")
+        elif ok:
+            badge.setStyleSheet("color: #22c55e; background-color: #052a14; border: 1px solid #166534; border-radius: 4px; padding: 3px; font-family: monospace; font-weight: bold;")
+        else:
+            badge.setStyleSheet("color: #f87171; background-color: #2a0a0a; border: 1px solid #991b1b; border-radius: 4px; padding: 3px; font-family: monospace; font-weight: bold;")
+            
+        layout.addWidget(lbl_title, 1)
+        layout.addWidget(lbl_detail, 2)
+        layout.addWidget(badge, 0)
 
-    def columnCount(self, parent=None):
-        return self._data.shape[1]
-
-    def data(self, index, role=Qt.DisplayRole):
-        if index.isValid() and role == Qt.DisplayRole:
-            val = self._data.iloc[index.row(), index.column()]
-            return str(val) if pd.notna(val) else ""
-        return None
-
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole:
-            if orientation == Qt.Horizontal:
-                return str(self._data.columns[section])
-            if orientation == Qt.Vertical:
-                return str(self._data.index[section])
-        return None
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -498,11 +544,14 @@ class MainWindow(QMainWindow):
                 comp_face = "bottom"
                 
             Mu = abs(self.forces[zone]["M"])
-            Vu = abs(self.forces[zone]["V"])
-            Tu = abs(self.forces[zone]["T"])
+            Vu_design = abs(self.forces[zone]["V"])
+            Tu_design = abs(self.forces[zone]["T"])
+            m_combo = self.force_meta[zone]["M"]
+            v_combo = self.force_meta[zone]["V"]
+            t_combo = self.force_meta[zone]["T"]
             
             res_flex = calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As_tens, As_comp)
-            res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu, Tu, n_legs, bar_v, lambda_c, stirrup_spacing)
+            res_shear = calculate_shear_torsion(b, h, d, fc, fyt, fy, cover_clear, Vu_design, Tu_design, n_legs, bar_v, lambda_c, stirrup_spacing)
             skin = calculate_skin_reinforcement(h, d, skin_dia, skin_qty, skin_layers)
             
             top_bar_dia = BAR_OPTIONS[self.app_state.get(f"td1_{zone}", "DB25")]
@@ -511,29 +560,134 @@ class MainWindow(QMainWindow):
             dev_bot = calculate_development_length(bot_bar_dia, fy, fc, False, cover_clear, clear_space, lambda_c)
             
             dc_flex = round(Mu / res_flex["phi_Mn"], 2) if res_flex["phi_Mn"] > 0 else 999.9
-            dc_pure_shear = Vu / res_shear["phi_Vn"] if res_shear.get("phi_Vn", 0) > 0 else 999.9
+            dc_pure_shear = Vu_design / res_shear["phi_Vn"] if res_shear.get("phi_Vn", 0) > 0 else 999.9
             dc_steel_force = res_shear.get("final_s", 0) / res_shear.get("s_calc", 9999) if res_shear.get("s_calc", 9999) > 0 else 0
             dc_shear = round(max(dc_pure_shear, dc_steel_force), 2)
             
+            flex_ok = (
+                res_flex["converged"]
+                and res_flex["passes_As_min"]
+                and res_flex["is_ductile"]
+                and res_flex["passes_As_max_tc"]
+                and res_flex["phi_Mn"] >= Mu
+            )
+            shear_ok = res_shear["phi_Vn"] >= Vu_design and res_shear["spacing_ok"] and not res_shear["section_fails"]
+
+            if flex_ok and shear_ok:
+                zone_col.addWidget(StatusCard("pass", f"{zone} passes flexure and shear/torsion preliminary checks."))
+            elif res_flex["phi_Mn"] >= Mu and shear_ok:
+                zone_col.addWidget(StatusCard("warn", f"{zone} has enough strength, but detailing or ductility needs review."))
+            else:
+                zone_col.addWidget(StatusCard("fail", f"{zone} fails one or more required checks."))
+
+            flex_ui = "pass" if dc_flex <= 1.0 else "fail"
+            dc_pure_shear_rounded = round(dc_pure_shear, 2)
+            shear_ui = "pass" if dc_pure_shear_rounded <= 1.0 else "fail"
+            stirrup_ui = "pass" if dc_shear <= 1.0 else "fail"
+            stirrup_value = f"{n_legs}-DB{bar_v}"
+            stirrup_label = f"@ {res_shear['final_s']} mm | D/C {dc_shear}"
+            strain_ui = "pass" if res_flex["strain_class"] == "Tension-controlled" else ("warn" if res_flex["strain_class"] == "Transition zone" else "fail")
+
+            metrics_layout = QGridLayout()
+            metrics_layout.addWidget(MiniMetric("phi Mn", f"{res_flex['phi_Mn']} kNm", f"{m_combo} | D/C {dc_flex}", flex_ui), 0, 0)
+            metrics_layout.addWidget(MiniMetric("phi Vn", f"{res_shear['phi_Vn']} kN", f"{v_combo} | D/C {dc_pure_shear_rounded}", shear_ui), 0, 1)
+            metrics_layout.addWidget(MiniMetric("Stirrups", stirrup_value, stirrup_label, stirrup_ui), 1, 0)
+            metrics_layout.addWidget(MiniMetric("Strain", f"{res_flex['eps_t']}", res_flex["strain_class"], strain_ui), 1, 1)
+            zone_col.addLayout(metrics_layout)
+
             fig = draw_beam_section(b, h, cover_clear, bar_v, top_rg, bot_rg, res_flex, zone, skin, skin_dia, comp_face)
             canvas = FigureCanvas(fig)
             canvas.setFixedHeight(200)
             zone_col.addWidget(canvas)
             
-            res_lbl = QLabel(f"<b>phi_Mn:</b> {res_flex['phi_Mn']} kNm (D/C: {dc_flex})<br>"
-                             f"<b>phi_Vn:</b> {res_shear['phi_Vn']} kN (D/C: {round(dc_pure_shear,2)})<br>"
-                             f"<b>Stirrups D/C:</b> {dc_shear}")
-            zone_col.addWidget(res_lbl)
+            lbl_checks = QLabel("<b>ACI Style Checks</b>")
+            lbl_checks.setStyleSheet("color: #98a2b8; margin-top: 10px; border-bottom: 1px solid #2a3044;")
+            zone_col.addWidget(lbl_checks)
+
+            zone_col.addWidget(CheckRow("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{m_combo}; {res_flex['phi_Mn']} >= {Mu:.1f} kNm"))
+            zone_col.addWidget(CheckRow("Minimum As", res_flex["passes_As_min"], f"As = {As_tens:.1f}; As,min = {res_flex['As_min']} mm2"))
+            zone_col.addWidget(CheckRow("Tension-controlled", res_flex["is_ductile"], f"eps_t = {res_flex['eps_t']}; phi = {res_flex['phi']}", warn=not res_flex["is_ductile"] and res_flex["phi_Mn"] >= Mu))
+            zone_col.addWidget(CheckRow("Max As tension-controlled", res_flex["passes_As_max_tc"], f"As = {As_tens:.1f}; As,max,tc = {res_flex['As_max_tc']} mm2"))
+            zone_col.addWidget(CheckRow("Shear phiVn >= Vu", res_shear["phi_Vn"] >= Vu_design, f"{v_combo}; {res_shear['phi_Vn']} >= {Vu_design:.1f} kN"))
+            zone_col.addWidget(CheckRow("Max Shear/Torsion Web Crushing", not res_shear["section_fails"], f"Stress = {res_shear['combined_stress']:.2f} MPa <= Limit = {res_shear['stress_limit']:.2f} MPa"))
+            zone_col.addWidget(CheckRow("Transverse spacing", res_shear["spacing_ok"], f"s use = {res_shear['final_s']} mm; s exact = {res_shear['s_exact']} mm; s max = {res_shear['s_max']} mm"))
+            zone_col.addWidget(CheckRow("Torsion threshold", not res_shear["needs_torsion"], f"{t_combo}; Tu = {Tu_design:.1f} kNm; phiTth = {res_shear['T_th']} kNm", warn=res_shear["needs_torsion"]))
+
+            if not skin["required"]:
+                skin_detail = f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-DB{skin_dia}; h = {h:.0f} mm <= 900 mm, not required"
+            else:
+                skin_detail = f"{skin['layers']} layer(s) of {skin['bars_per_layer']}-DB{skin_dia}; s = {skin['spacing']} <= {skin['s_limit']} mm"
+            zone_col.addWidget(CheckRow("ACI side-face skin bars", skin["spacing_ok"], skin_detail))
+
+            if res_shear["needs_torsion"]:
+                gross_perimeter = 2 * (b + h)
+                face_ratio = b / gross_perimeter
+                side_ratio = (2 * h) / gross_perimeter
+                Al_req_face = res_shear["Al_req"] * face_ratio
+                Al_req_sides = res_shear["Al_req"] * side_ratio
+
+                flex_utilization = Mu / res_flex["phi_Mn"] if res_flex["phi_Mn"] > 0 else 1.0
+                As_flex_req = As_tens * min(flex_utilization, 1.0)
+                tension_face_prov = bot_rg.area if zone == "Mid" else top_rg.area
+                tension_face_req = As_flex_req + Al_req_face
+                tension_face_ok = tension_face_prov >= tension_face_req
+
+                side_face_prov = skin["area_total"]
+                side_face_ok = side_face_prov >= Al_req_sides
+                torsion_long_ok = tension_face_ok and side_face_ok
+
+                if torsion_long_ok:
+                    torsion_long_detail = f"Tension face and sides OK. Al req side: {Al_req_sides:.0f} mm2, face: {Al_req_face:.0f} mm2"
+                else:
+                    torsion_long_detail = f"FAIL: tension face {tension_face_prov:.0f}/{tension_face_req:.0f} mm2. Sides {side_face_prov:.0f}/{Al_req_sides:.0f} mm2"
+            else:
+                torsion_long_ok = True
+                torsion_long_detail = "Tu <= phiTth; longitudinal torsion steel not required"
             
-            stirrup_text = f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm"
+            zone_col.addWidget(CheckRow("Face-by-face torsion steel Al", torsion_long_ok, torsion_long_detail))
+
+            # Add Calculation Summary Button & Table
+            calc_data = [
+                ("d", f"{d:.1f} mm", "Effective depth"),
+                ("d'", f"{d_prime:.1f} mm", "Compression steel depth"),
+                ("Governing Mu combo", m_combo, f"Mu = {Mu:.1f} kNm"),
+                ("Governing Vu combo", v_combo, f"Vu = {Vu_design:.1f} kN"),
+                ("Governing Tu combo", t_combo, f"Tu = {Tu_design:.1f} kNm"),
+                ("c / a", f"{res_flex['c']} / {res_flex['a']} mm", "Neutral axis and stress block"),
+                ("Mn / phiMn", f"{res_flex['Mn']} / {res_flex['phi_Mn']} kNm", "Nominal and design moment"),
+                ("lambda_s", res_shear["lambda_s"], "Size effect factor shown for reference"),
+                ("Aoh / ph", f"{res_shear['Aoh']:.0f} mm2 / {res_shear['ph']:.0f} mm", "Torsion cage geometry"),
+                ("Al torsion", f"{res_shear['Al_req']} mm2", "Required if torsion governs"),
+                ("Skin bars", skin_detail, "ACI 318 side-face longitudinal reinforcement for h > 900 mm"),
+                ("Skin Al for torsion", f"{skin['area_total']} mm2", "Counted only if enclosed and developed"),
+                ("Top ldh / lap", f"{dev_top['ldh']} / {dev_top['lap']} mm", "Development lengths"),
+                ("Bottom lap", f"{dev_bot['lap']} mm", "Development length"),
+            ]
+            
+            btn_calc = QPushButton(f"Toggle Calculation Summary - {zone}")
+            btn_calc.setStyleSheet("background-color: #1e2330; color: #e8eaf0; text-align: left; padding: 5px;")
+            table_calc = QTableView()
+            table_calc.setModel(PandasModel(pd.DataFrame(calc_data, columns=["Parameter", "Value", "Note"])))
+            table_calc.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            table_calc.verticalHeader().hide()
+            table_calc.setFixedHeight(250)
+            table_calc.setVisible(False)
+            
+            btn_calc.clicked.connect(lambda checked, t=table_calc: t.setVisible(not t.isVisible()))
+            
+            zone_col.addWidget(btn_calc)
+            zone_col.addWidget(table_calc)
+            
+            stirrup_status = "OK" if shear_ok else "FAIL"
+            stirrup_text = f"{n_legs}-DB{bar_v} @ {res_shear['final_s']} mm ({stirrup_status}, D/C: {dc_shear})"
             self.last_zone_results[zone] = {
                 "Mu": round(Mu, 1),
                 "M_combo": self.force_meta[zone]["M"],
                 "phi_Mn": res_flex["phi_Mn"],
                 "DC_flex": dc_flex,
-                "Vu": round(Vu, 1),
+                "Vu": round(Vu_design, 1),
                 "V_combo": self.force_meta[zone]["V"],
-                "Tu": round(Tu, 1),
+                "Tu": round(Tu_design, 1),
                 "T_combo": self.force_meta[zone]["T"],
                 "DC_shear": dc_shear,
                 "phi_Vn": res_shear["phi_Vn"],
@@ -554,7 +708,7 @@ class MainWindow(QMainWindow):
                 "Mu (kNm)": round(Mu, 1),
                 "phiMn (kNm)": res_flex["phi_Mn"],
                 "Flexure D/C": dc_flex,
-                "Vu (kN)": round(Vu, 1),
+                "Vu (kN)": round(Vu_design, 1),
                 "phiVn (kN)": res_shear["phi_Vn"],
                 "Stirrups": stirrup_text,
                 "Strain class": res_flex["strain_class"],

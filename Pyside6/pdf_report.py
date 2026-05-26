@@ -1,5 +1,5 @@
 from fpdf import FPDF
-from engine import ZONES
+from beam_engine import ZONES
 
 def create_pdf_report(b, h, fc, fy, fyt, frame_name, zone_data, input_mode):
     def to_float(value):

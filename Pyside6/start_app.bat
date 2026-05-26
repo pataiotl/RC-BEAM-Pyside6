@@ -2,5 +2,5 @@
 echo Installing requirements...
 pip install -r requirements.txt
 echo Starting RC Beam Designer...
-python main.py
+python run_pyside6.py
 pause
