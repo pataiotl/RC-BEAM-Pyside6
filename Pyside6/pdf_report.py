@@ -72,6 +72,7 @@ def create_pdf_report(groups, input_mode):
         zone_data = grp.get("zone_data", {})
         
         pdf.add_page()
+        pdf.set_text_color(0, 0, 0)
 
         pdf.set_font("Arial", "B", 13)
         pdf.cell(0, 6, "REINFORCED CONCRETE BEAM", ln=True, align="C")

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QLabel, QPushButton, QRadioButton, QComboBox, QLineEdit,
     QSpinBox, QDoubleSpinBox, QFileDialog, QTabWidget, QScrollArea,
     QGroupBox, QMessageBox, QTableView, QHeaderView, QListWidget,
-    QListWidgetItem, QAbstractItemView
+    QListWidgetItem, QAbstractItemView, QTextBrowser
 )
 from PySide6.QtCore import Qt, QAbstractTableModel
 from PySide6.QtGui import QFont
@@ -20,11 +20,19 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 # Import our custom modules
 from beam_engine import (
-    ZONES, BAR_OPTIONS, STIRRUP_OPTIONS, SKIN_BAR_OPTIONS,
-    calculate_beam_flexure, calculate_shear_torsion,
-    calculate_development_length, calculate_skin_reinforcement, get_rebar_group
+    RebarGroup,
+    get_rebar_group,
+    calculate_beam_flexure,
+    calculate_shear_torsion,
+    calculate_development_length,
+    calculate_skin_reinforcement,
+    ZONES,
+    BAR_OPTIONS,
+    STIRRUP_OPTIONS,
+    SKIN_BAR_OPTIONS,
 )
 from plotting import draw_beam_section, draw_force_diagrams
+from calculation_steps import generate_calculation_html
 from pdf_report import create_pdf_report
 from utils import (
     DEFAULT_APP_STATE, load_workspace_excel, build_workspace_excel_bytes,
@@ -329,12 +337,12 @@ class MainWindow(QMainWindow):
         run_layout = QHBoxLayout()
         self.btn_run = QPushButton("Design Active Group")
         self.btn_run.setObjectName("primaryButton")
-        self.btn_run.clicked.connect(self.run_design)
+        self.btn_run.clicked.connect(lambda checked=False: self.run_design())
         run_layout.addWidget(self.btn_run)
         
         self.btn_run_all = QPushButton("Design All Groups")
         self.btn_run_all.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
-        self.btn_run_all.clicked.connect(self.run_all_groups_design)
+        self.btn_run_all.clicked.connect(lambda checked=False: self.run_all_groups_design())
         run_layout.addWidget(self.btn_run_all)
         
         self.scroll_layout.addLayout(run_layout)
@@ -401,9 +409,34 @@ class MainWindow(QMainWindow):
         
         self.main_tabs.addTab(self.export_tab, "Export")
         
+        # ----------------- CALCULATIONS TAB -----------------
+        self.calc_tab = QWidget()
+        self.calc_tab_layout = QVBoxLayout(self.calc_tab)
+        
+        calc_header = QHBoxLayout()
+        calc_header.addWidget(QLabel("Select Group:"))
+        self.calc_group_combo = QComboBox()
+        self.calc_group_combo.currentTextChanged.connect(self.on_calc_dropdowns_changed)
+        calc_header.addWidget(self.calc_group_combo)
+        
+        calc_header.addWidget(QLabel("Select Zone:"))
+        self.calc_zone_combo = QComboBox()
+        self.calc_zone_combo.addItems(["Left", "Mid", "Right"])
+        self.calc_zone_combo.currentTextChanged.connect(self.on_calc_dropdowns_changed)
+        calc_header.addWidget(self.calc_zone_combo)
+        calc_header.addStretch()
+        
+        self.calc_tab_layout.addLayout(calc_header)
+        
+        self.calc_browser = QTextBrowser()
+        self.calc_tab_layout.addWidget(self.calc_browser)
+        
+        self.main_tabs.addTab(self.calc_tab, "Calculations")
+        
         # Hide tabs initially
         self.main_tabs.setTabVisible(1, False)
         self.main_tabs.setTabVisible(2, False)
+        self.main_tabs.setTabVisible(3, False)
         
         self.rb_manual.setChecked(True)
 
@@ -620,6 +653,7 @@ class MainWindow(QMainWindow):
             self.force_meta = self.app_state["_force_meta"]
         self.update_forces_from_state()
         self.run_design(switch_tab=False)
+        self.on_calc_dropdowns_changed()
 
         # Restore previous group
         self.app_state = self.groups[prev_group]
@@ -644,6 +678,7 @@ class MainWindow(QMainWindow):
         # Make tabs visible
         self.main_tabs.setTabVisible(1, True)
         self.main_tabs.setTabVisible(2, True)
+        self.main_tabs.setTabVisible(3, True)
         
         groups_to_show = self._get_groups_for_output()
         
@@ -654,6 +689,15 @@ class MainWindow(QMainWindow):
         if self.active_group_id in groups_to_show:
             self.results_group_combo.setCurrentText(self.active_group_id)
         self.results_group_combo.blockSignals(False)
+        
+        # Populate Calculations tab combo
+        self.calc_group_combo.blockSignals(True)
+        self.calc_group_combo.clear()
+        self.calc_group_combo.addItems(groups_to_show)
+        if self.active_group_id in groups_to_show:
+            self.calc_group_combo.setCurrentText(self.active_group_id)
+        self.calc_group_combo.blockSignals(False)
+        self.on_calc_dropdowns_changed()
         
         # Populate Export tab checklist
         self.export_list.clear()
@@ -919,6 +963,7 @@ class MainWindow(QMainWindow):
         
         zones_layout = QHBoxLayout()
         self.last_zone_results = {}
+        self.last_zone_raw_results = {}
         self.last_summary = []
         
         b = self.app_state.get("b", 300)
@@ -1136,6 +1181,11 @@ class MainWindow(QMainWindow):
                 "dev_top_lap": dev_top["lap"],
                 "dev_bot": dev_bot["lap"],
             }
+            self.last_zone_raw_results[zone] = {
+                "flex": res_flex,
+                "shear": res_shear,
+                "skin": skin,
+            }
             self.last_summary.append({
                 "Zone": zone,
                 "Mu (kNm)": round(Mu, 1),
@@ -1169,6 +1219,45 @@ class MainWindow(QMainWindow):
         if switch_tab:
             self._unlock_and_populate_tabs()
             self.main_tabs.setCurrentIndex(1)
+            
+    def on_calc_dropdowns_changed(self, *args):
+        group_name = self.calc_group_combo.currentText()
+        zone = self.calc_zone_combo.currentText()
+        
+        if not group_name or not zone or not hasattr(self, 'last_zone_raw_results'):
+            return
+            
+        # Ensure we have the raw results for the selected group
+        # If it doesn't match active group, we temporarily calculate it
+        if group_name != self.app_state.get("group_name", self.selected_frame_label):
+            prev_group = self.active_group_id
+            prev_forces = {z: dict(v) for z, v in self.forces.items()}
+            prev_meta = {z: dict(v) for z, v in self.force_meta.items()}
+            
+            self.app_state = self.groups[group_name]
+            if "_forces" in self.app_state:
+                self.forces = self.app_state["_forces"]
+                self.force_meta = self.app_state["_force_meta"]
+            self.update_forces_from_state()
+            self.run_design(switch_tab=False)
+            
+            self.app_state = self.groups[prev_group]
+            self.forces = prev_forces
+            self.force_meta = prev_meta
+            self.update_forces_from_state()
+
+        if zone in self.last_zone_raw_results:
+            raw = self.last_zone_raw_results[zone]
+            html = generate_calculation_html(
+                zone, 
+                self.groups[group_name], 
+                self.groups[group_name].get("_forces", self.forces)[zone], 
+                raw["flex"], 
+                raw["shear"], 
+                raw["skin"]
+            )
+            self.calc_browser.setHtml(html)
+
     def download_pdf(self):
         fname, _ = QFileDialog.getSaveFileName(self, "Save PDF Report", f"Beam_{safe_filename(self.selected_frame_label)}_Report.pdf", "PDF Files (*.pdf)")
         if fname:

@@ -125,7 +125,7 @@ def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
                 converged = True
                 break
 
-    _, a, _, _, _, Mn_kNm = section_state(c)
+    _, a, Cc, Cs, T, Mn_kNm = section_state(c)
     eps_t = ecu * (dt - c) / c if c > 0 else 0
     if eps_t <= eps_y:
         phi = 0.65
@@ -151,6 +151,10 @@ def calculate_beam_flexure(b, h, d, dt, d_prime, fc, fy, As, As_prime):
         "eps_t": round(eps_t, 5),
         "phi": round(phi, 3),
         "Mn": round(Mn_kNm, 1),
+        "beta1": round(beta1, 3),
+        "Cc": round(Cc / 1000, 1), # converted to kN
+        "Cs": round(Cs / 1000, 1), # converted to kN
+        "T": round(T / 1000, 1), # converted to kN
     }
 
 
@@ -247,6 +251,8 @@ def calculate_shear_torsion(b, h, d, fc, fyt, fyl, cover_clear, Vu_kN, Tu_kNm, n
         "Ao": Ao,
         "ph": ph,
         "spacing_ok": spacing_ok,
+        "Vc": round(Vc / 1000, 1),
+        "Vs_prov": round(Vs_prov / 1000, 1),
     }
 
 
