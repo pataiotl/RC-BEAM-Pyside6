@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QAbstractItemView, QTextBrowser
 )
 from PySide6.QtCore import Qt, QAbstractTableModel
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon, QPixmap
 
 import matplotlib
 matplotlib.use('QtAgg')
@@ -46,37 +46,54 @@ class StatusCard(QLabel):
     def __init__(self, kind, text):
         super().__init__(text)
         self.setWordWrap(True)
+        self.setContentsMargins(10, 8, 10, 8)
         if kind == "fail":
-            bg, color, border = "#2a0a0a", "#f87171", "#991b1b"
+            bg, color, border = "#1A0505", "#F85149", "#DA3633"
         elif kind == "warn":
-            bg, color, border = "#2a1f00", "#fbbf24", "#92400e"
+            bg, color, border = "#1A1200", "#E3B341", "#9E6A03"
         else:
-            bg, color, border = "#052a14", "#22c55e", "#166534"
-        self.setStyleSheet(f"background-color: {bg}; color: {color}; border: 1px solid {border}; border-radius: 4px; padding: 6px; font-weight: bold;")
+            bg, color, border = "#051A0A", "#3FB950", "#238636"
+        self.setStyleSheet(
+            f"background-color: {bg}; color: {color}; border: 1px solid {border};"
+            f"border-radius: 6px; padding: 8px 10px; font-weight: bold; font-size: 9pt;"
+        )
 
 class MiniMetric(QWidget):
     def __init__(self, label, value, delta, status="pass"):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(2)
-        self.setStyleSheet("background-color: #181c24; border: 1px solid #2a3044; border-radius: 6px;")
-        
-        lbl_title = QLabel(label)
-        lbl_title.setStyleSheet("color: #e8eaf0; font-size: 10px; font-weight: bold; border: none;")
-        
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(3)
+        self.setStyleSheet(
+            "background-color: #161B22; border: 1px solid #21262D;"
+            "border-radius: 8px;"
+        )
+
+        lbl_title = QLabel(label.upper())
+        lbl_title.setStyleSheet(
+            "color: #8B949E; font-size: 7pt; font-weight: bold;"
+            "letter-spacing: 1px; border: none; background: transparent;"
+        )
+
         lbl_value = QLabel(value)
-        lbl_value.setStyleSheet("color: white; font-size: 16px; font-weight: bold; border: none;")
-        
+        lbl_value.setStyleSheet(
+            "color: #E6EDF3; font-size: 15pt; font-weight: bold;"
+            "border: none; background: transparent;"
+        )
+
         lbl_delta = QLabel(delta)
+        lbl_delta.setWordWrap(True)
         if status == "fail":
-            bg, txt, border = "#2a0a0a", "#f87171", "#991b1b"
+            bg, txt, border = "#1A0505", "#F85149", "#DA3633"
         elif status == "warn":
-            bg, txt, border = "#2a1f00", "#fbbf24", "#92400e"
+            bg, txt, border = "#1A1200", "#E3B341", "#9E6A03"
         else:
-            bg, txt, border = "#064e24", "#22c55e", "#166534"
-        lbl_delta.setStyleSheet(f"color: {txt}; background-color: {bg}; border: 1px solid {border}; border-radius: 8px; padding: 2px 4px; font-size: 9px; font-weight: bold;")
-        
+            bg, txt, border = "#051A0A", "#3FB950", "#238636"
+        lbl_delta.setStyleSheet(
+            f"color: {txt}; background-color: {bg}; border: 1px solid {border};"
+            f"border-radius: 6px; padding: 3px 6px; font-size: 8pt; font-weight: bold;"
+        )
+
         layout.addWidget(lbl_title)
         layout.addWidget(lbl_value)
         layout.addWidget(lbl_delta)
@@ -85,29 +102,48 @@ class CheckRow(QWidget):
     def __init__(self, label, ok, detail, warn=False):
         super().__init__()
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        self.setStyleSheet("background-color: #181c24; border: 1px solid #2a3044; border-radius: 6px;")
-        
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
+        self.setStyleSheet(
+            "background-color: #161B22; border: 1px solid #21262D;"
+            "border-radius: 6px;"
+        )
+
         lbl_title = QLabel(label)
-        lbl_title.setStyleSheet("font-weight: bold; color: #e8eaf0; border: none;")
-        lbl_title.setMinimumWidth(150)
-        
+        lbl_title.setStyleSheet(
+            "font-weight: 600; color: #C9D1D9; border: none; background: transparent;"
+        )
+        lbl_title.setMinimumWidth(180)
+
         lbl_detail = QLabel(detail)
-        lbl_detail.setStyleSheet("color: #98a2b8; font-family: monospace; font-size: 11px; border: none;")
+        lbl_detail.setStyleSheet(
+            "color: #8B949E; font-family: 'Consolas', monospace; font-size: 8pt;"
+            "border: none; background: transparent;"
+        )
         lbl_detail.setWordWrap(True)
-        
-        badge = QLabel("WARN" if warn else ("PASS" if ok else "FAIL"))
+
+        badge_text = "WARN" if warn else ("PASS" if ok else "FAIL")
+        badge = QLabel(badge_text)
         badge.setAlignment(Qt.AlignCenter)
-        badge.setFixedWidth(50)
+        badge.setFixedWidth(52)
         if warn:
-            badge.setStyleSheet("color: #fbbf24; background-color: #2a1f00; border: 1px solid #92400e; border-radius: 4px; padding: 3px; font-family: monospace; font-weight: bold;")
+            badge.setStyleSheet(
+                "color: #E3B341; background-color: #1A1200; border: 1px solid #9E6A03;"
+                "border-radius: 4px; padding: 3px 6px; font-size: 8pt; font-weight: bold;"
+            )
         elif ok:
-            badge.setStyleSheet("color: #22c55e; background-color: #052a14; border: 1px solid #166534; border-radius: 4px; padding: 3px; font-family: monospace; font-weight: bold;")
+            badge.setStyleSheet(
+                "color: #3FB950; background-color: #051A0A; border: 1px solid #238636;"
+                "border-radius: 4px; padding: 3px 6px; font-size: 8pt; font-weight: bold;"
+            )
         else:
-            badge.setStyleSheet("color: #f87171; background-color: #2a0a0a; border: 1px solid #991b1b; border-radius: 4px; padding: 3px; font-family: monospace; font-weight: bold;")
-            
+            badge.setStyleSheet(
+                "color: #F85149; background-color: #1A0505; border: 1px solid #DA3633;"
+                "border-radius: 4px; padding: 3px 6px; font-size: 8pt; font-weight: bold;"
+            )
+
         layout.addWidget(lbl_title, 1)
-        layout.addWidget(lbl_detail, 2)
+        layout.addWidget(lbl_detail, 3)
         layout.addWidget(badge, 0)
 
 
@@ -115,6 +151,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RC Beam Designer - PySide6")
+        
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        ico_path = os.path.join(base_dir, "assets", "logo.ico")
+        self.setWindowIcon(QIcon(ico_path))
+        
         self.app_state = DEFAULT_APP_STATE.copy()
         self.app_state["group_name"] = "Manual"
         self.groups = {"Manual": self.app_state}
@@ -142,14 +183,35 @@ class MainWindow(QMainWindow):
         
         # Hero Section
         hero = QWidget()
-        hero_layout = QVBoxLayout(hero)
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(24, 20, 24, 20)
         hero.setObjectName("heroBox")
+        hero.setStyleSheet(
+            "#heroBox { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #0D1117, stop:1 #161B22);"
+            "border: 1px solid #21262D; border-radius: 10px;"
+            "margin-bottom: 4px; }"
+        )
+        
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        logo_path = os.path.join(base_dir, "assets", "logo.png")
+        
+        logo_label = QLabel()
+        logo_pixmap = QPixmap(logo_path)
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(logo_pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        hero_layout.addWidget(logo_label)
+        
+        hero_text_layout = QVBoxLayout()
         title = QLabel("RC Beam Designer - ACI 318-19")
         title.setObjectName("heroTitle")
         sub = QLabel("Native PySide6 desktop workspace for preliminary flexure, shear, torsion, and detailing.")
         sub.setObjectName("heroSub")
-        hero_layout.addWidget(title)
-        hero_layout.addWidget(sub)
+        hero_text_layout.addWidget(title)
+        hero_text_layout.addWidget(sub)
+        
+        hero_layout.addLayout(hero_text_layout)
+        hero_layout.addStretch()
         self.scroll_layout.addWidget(hero)
         
         # Workspace I/O
@@ -335,13 +397,13 @@ class MainWindow(QMainWindow):
         
         # Run Design
         run_layout = QHBoxLayout()
-        self.btn_run = QPushButton("Design Active Group")
+        self.btn_run = QPushButton("▶  Design Active Group")
         self.btn_run.setObjectName("primaryButton")
         self.btn_run.clicked.connect(lambda checked=False: self.run_design())
         run_layout.addWidget(self.btn_run)
         
-        self.btn_run_all = QPushButton("Design All Groups")
-        self.btn_run_all.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
+        self.btn_run_all = QPushButton("⚡  Design All Groups")
+        self.btn_run_all.setObjectName("successButton")
         self.btn_run_all.clicked.connect(lambda checked=False: self.run_all_groups_design())
         run_layout.addWidget(self.btn_run_all)
         
@@ -397,11 +459,11 @@ class MainWindow(QMainWindow):
         self.export_tab_layout.addLayout(exp_btn_layout1)
         
         exp_btn_layout2 = QHBoxLayout()
-        btn_exp_sel = QPushButton("Export Selected")
-        btn_exp_sel.setStyleSheet("background-color: #2563eb; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
+        btn_exp_sel = QPushButton("Export Selected as PDF")
+        btn_exp_sel.setObjectName("primaryButton")
         btn_exp_sel.clicked.connect(self.export_selected_groups_pdf)
-        btn_exp_all = QPushButton("Export All")
-        btn_exp_all.setStyleSheet("background-color: #7c3aed; color: white; font-weight: bold; padding: 10px; border-radius: 6px;")
+        btn_exp_all = QPushButton("Export All Groups as PDF")
+        btn_exp_all.setObjectName("successButton")
         btn_exp_all.clicked.connect(self.export_all_groups_pdf)
         exp_btn_layout2.addWidget(btn_exp_sel)
         exp_btn_layout2.addWidget(btn_exp_all)
@@ -1078,8 +1140,13 @@ class MainWindow(QMainWindow):
             canvas.setFixedHeight(200)
             zone_col.addWidget(canvas)
             
-            lbl_checks = QLabel("<b>ACI Style Checks</b>")
-            lbl_checks.setStyleSheet("color: #98a2b8; margin-top: 10px; border-bottom: 1px solid #2a3044;")
+            lbl_checks = QLabel("ACI 318-19 Code Checks")
+            lbl_checks.setStyleSheet(
+                "color: #58A6FF; font-size: 8pt; font-weight: bold; letter-spacing: 1px;"
+                "text-transform: uppercase; margin-top: 8px;"
+                "border-bottom: 1px solid #21262D; padding-bottom: 4px;"
+                "background: transparent;"
+            )
             zone_col.addWidget(lbl_checks)
 
             zone_col.addWidget(CheckRow("Flexure phiMn >= Mu", res_flex["phi_Mn"] >= Mu, f"{m_combo}; {res_flex['phi_Mn']} >= {Mu:.1f} kNm"))
@@ -1142,8 +1209,12 @@ class MainWindow(QMainWindow):
                 ("Bottom lap", f"{dev_bot['lap']} mm", "Development length"),
             ]
             
-            btn_calc = QPushButton(f"Toggle Calculation Summary - {zone}")
-            btn_calc.setStyleSheet("background-color: #1e2330; color: #e8eaf0; text-align: left; padding: 5px;")
+            btn_calc = QPushButton(f"▸  Toggle Calculation Summary — {zone}")
+            btn_calc.setStyleSheet(
+                "background-color: #1C2128; color: #8B949E; text-align: left;"
+                "padding: 6px 10px; border: 1px solid #21262D; border-radius: 4px;"
+                "font-size: 8pt;"
+            )
             table_calc = QTableView()
             table_calc.setModel(PandasModel(pd.DataFrame(calc_data, columns=["Parameter", "Value", "Note"])))
             table_calc.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
